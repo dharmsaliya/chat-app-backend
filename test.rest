@@ -1,0 +1,28 @@
+POST http://localhost:5000/api/auth/signup
+Content-Type: application/json
+
+{
+  "email": "extraemail73629@gmail.com",
+  "password": "password123",
+  "name": "Test User"
+}
+
+### Logout request
+POST http://localhost:5000/api/auth/logout
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIwMjdkNmFjMC0xNDVmLTQxYzctOWIwZi1mZWIwZDJiNjVlNTEiLCJlbWFpbCI6ImV4dHJhZW1haWw3MzYyOUBnbWFpbC5jb20iLCJzZXNzaW9uSWQiOiJtZHNrMmhvbW1uZGU3cjdpb20iLCJpYXQiOjE3NTQwMzY1NDF9.JL9RLK7jYVhcjv0GHWAwd_pKxOyWWkhQeDgrVl-r2Pk
+
+
+
+###
+
+POST http://localhost:5000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "extraemail73629@gmail.com",
+  "password": "password123"
+}
+
+### Verify user
+GET http://localhost:5000/api/auth/verify
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIwMjdkNmFjMC0xNDVmLTQxYzctOWIwZi1mZWIwZDJiNjVlNTEiLCJlbWFpbCI6ImV4dHJhZW1haWw3MzYyOUBnbWFpbC5jb20iLCJzZXNzaW9uSWQiOiJtZHNrNHR5NWF6ajU3cGxqdnRyIiwiaWF0IjoxNzU0MDM2NjUxfQ.PPfUIrqJ7WnBxpN1WLe5PYhdP9I4GFCMibq3FokAz00
