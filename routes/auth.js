@@ -1,25 +1,24 @@
 const express = require('express');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { createClient } = require('@supabase/supabase-js');
+const { supabase } = require('../config/database');
+const { userSessions } = require('../middleware/auth');
+const UserService = require('../services/userService');
+const {
+  isValidEmail,
+  isValidUsername,
+  isReservedUsername,
+  isValidPassword,
+  isValidName
+} = require('../utils/validators');
 
 const router = express.Router();
 
-// Per-user session management (ADDED)
-const userSessions = new Map(); // userId -> Set of session identifiers
-
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
-
-// Generate unique session ID (ADDED)
+// Generate unique session ID
 const generateSessionId = () => {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 };
 
-// Helper function to generate JWT token (MODIFIED)
+// Helper function to generate JWT token
 const generateToken = (userId, email) => {
   const sessionId = generateSessionId();
   const iat = Math.floor(Date.now() / 1000);
@@ -36,24 +35,18 @@ const generateToken = (userId, email) => {
   );
 };
 
-// Helper function to validate email
-const isValidEmail = (email) => {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
-};
-
 // @route   POST /api/auth/signup
-// @desc    Register new user
+// @desc    Register new user with username and QR
 // @access  Public
 router.post('/signup', async (req, res) => {
   try {
-    const { email, password, name } = req.body;
+    const { email, password, name, username } = req.body;
 
     // Validation
-    if (!email || !password || !name) {
+    if (!email || !password || !name || !username) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide email, password, and name'
+        message: 'Please provide email, password, name, and username'
       });
     }
 
@@ -64,53 +57,104 @@ router.post('/signup', async (req, res) => {
       });
     }
 
-    if (password.length < 6) {
+    if (!isValidPassword(password)) {
       return res.status(400).json({
         success: false,
         message: 'Password must be at least 6 characters long'
       });
     }
 
-    // Sign up with Supabase
-    const { data, error } = await supabase.auth.signUp({
+    if (!isValidName(name)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name must be between 1 and 50 characters'
+      });
+    }
+
+    if (!isValidUsername(username)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username must be 3-20 characters long and contain only letters, numbers, and underscores'
+      });
+    }
+
+    if (isReservedUsername(username)) {
+      return res.status(400).json({
+        success: false,
+        message: 'This username is reserved. Please choose another one.'
+      });
+    }
+
+    // Check if username is already taken
+    const isUsernameTaken = await UserService.isUsernameTaken(username);
+    if (isUsernameTaken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username is already taken'
+      });
+    }
+
+    // Sign up with Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: {
-          name: name
+          name: name.trim()
         }
       }
     });
 
-    if (error) {
+    if (authError) {
       return res.status(400).json({
         success: false,
-        message: error.message
+        message: authError.message
       });
     }
 
-    // Check if user exists (ADDED)
-    if (!data?.user) {
+    if (!authData?.user) {
       return res.status(400).json({
         success: false,
         message: 'User signup incomplete, email confirmation may be required'
       });
     }
 
-    // Generate JWT token
-    const token = generateToken(data.user.id, data.user.email);
+    // Create user profile in our users table with QR data
+    try {
+      const userProfile = await UserService.createUserProfile(
+        authData.user.id,
+        email,
+        username,
+        name
+      );
 
-    res.status(201).json({
-      success: true,
-      message: 'User registered successfully',
-      token,
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-        name: data.user.user_metadata.name,
-        emailConfirmed: data.user.email_confirmed_at ? true : false
-      }
-    });
+      // Generate JWT token
+      const token = generateToken(authData.user.id, authData.user.email);
+
+      res.status(201).json({
+        success: true,
+        message: 'User registered successfully',
+        token,
+        user: {
+          id: userProfile.id,
+          email: userProfile.email,
+          username: userProfile.username,
+          displayName: userProfile.display_name,
+          qrCodeData: userProfile.qr_code_data,
+          emailConfirmed: authData.user.email_confirmed_at ? true : false
+        }
+      });
+
+    } catch (profileError) {
+      // If profile creation fails, we should clean up the auth user
+      // In a production app, you might want to implement this cleanup
+      console.error('Profile creation failed:', profileError);
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to create user profile'
+      });
+    }
 
   } catch (error) {
     console.error('Signup error:', error);
@@ -144,32 +188,62 @@ router.post('/login', async (req, res) => {
     }
 
     // Sign in with Supabase
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
       email,
       password
     });
 
-    if (error) {
+    if (authError) {
       return res.status(400).json({
         success: false,
-        message: error.message
+        message: authError.message
       });
     }
 
-    // Generate JWT token
-    const token = generateToken(data.user.id, data.user.email);
+    // Get user profile from our users table
+    try {
+      const userProfile = await UserService.getUserProfile(authData.user.id);
+      
+      // Generate JWT token
+      const token = generateToken(authData.user.id, authData.user.email);
 
-    res.json({
-      success: true,
-      message: 'Login successful',
-      token,
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-        name: data.user.user_metadata.name,
-        emailConfirmed: data.user.email_confirmed_at ? true : false
-      }
-    });
+      res.json({
+        success: true,
+        message: 'Login successful',
+        token,
+        user: {
+          id: userProfile.id,
+          email: userProfile.email,
+          username: userProfile.username,
+          displayName: userProfile.display_name,
+          qrCodeData: userProfile.qr_code_data,
+          emailConfirmed: authData.user.email_confirmed_at ? true : false
+        }
+      });
+
+    } catch (profileError) {
+      // User exists in auth but not in our users table
+      // This might happen for users created before the update
+      console.error('User profile not found:', profileError);
+      
+      // Generate JWT token with limited data
+      const token = generateToken(authData.user.id, authData.user.email);
+
+      res.json({
+        success: true,
+        message: 'Login successful (profile migration needed)',
+        token,
+        user: {
+          id: authData.user.id,
+          email: authData.user.email,
+          username: null,
+          displayName: authData.user.user_metadata?.name || null,
+          qrCodeData: null,
+          emailConfirmed: authData.user.email_confirmed_at ? true : false,
+          needsProfileSetup: true
+        }
+      });
+    }
 
   } catch (error) {
     console.error('Login error:', error);
@@ -181,7 +255,7 @@ router.post('/login', async (req, res) => {
 });
 
 // @route   POST /api/auth/logout
-// @desc    Logout current session only (MODIFIED)
+// @desc    Logout current session only
 // @access  Private
 router.post('/logout', async (req, res) => {
   try {
@@ -222,7 +296,7 @@ router.post('/logout', async (req, res) => {
 });
 
 // @route   GET /api/auth/verify
-// @desc    Verify JWT token and get user info (MODIFIED)
+// @desc    Verify JWT token and get user info
 // @access  Private
 router.get('/verify', async (req, res) => {
   try {
@@ -239,7 +313,7 @@ router.get('/verify', async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const { userId, sessionId } = decoded;
 
-    // Check if this session is still active (ADDED)
+    // Check if this session is still active
     if (!userSessions.has(userId) || !userSessions.get(userId).has(sessionId)) {
       return res.status(401).json({
         success: false,
@@ -247,25 +321,34 @@ router.get('/verify', async (req, res) => {
       });
     }
 
-    // If you want to fetch additional user data from Supabase (optional)
-    // You would use the userId from the decoded token, not pass the JWT to Supabase
-    const { data: user, error } = await supabase
-      .from('auth.users') // or your custom users table
-      .select('*')
-      .eq('id', decoded.userId)
-      .single();
-
-    // For basic verification, you can just return the JWT claims
-    res.json({
-      success: true,
-      user: {
-        id: decoded.userId,
-        email: decoded.email,
-        // If you fetched from Supabase and want to include more data:
-        // name: user?.user_metadata?.name || 'Unknown',
-        // emailConfirmed: user?.email_confirmed_at ? true : false
-      }
-    });
+    // Get user profile
+    try {
+      const userProfile = await UserService.getUserProfile(userId);
+      
+      res.json({
+        success: true,
+        user: {
+          id: userProfile.id,
+          email: userProfile.email,
+          username: userProfile.username,
+          displayName: userProfile.display_name,
+          qrCodeData: userProfile.qr_code_data
+        }
+      });
+    } catch (error) {
+      // User might not have a profile in users table
+      res.json({
+        success: true,
+        user: {
+          id: decoded.userId,
+          email: decoded.email,
+          username: null,
+          displayName: null,
+          qrCodeData: null,
+          needsProfileSetup: true
+        }
+      });
+    }
 
   } catch (error) {
     console.error('Token verification error:', error);

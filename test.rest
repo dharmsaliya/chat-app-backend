@@ -1,28 +1,308 @@
-POST http://localhost:5000/api/auth/signup
-Content-Type: application/json
+# Chat App Backend API Testing
+# Make sure your server is running on localhost:5000
 
-{
-  "email": "extraemail73629@gmail.com",
-  "password": "password123",
-  "name": "Test User"
-}
+### Variables
+@baseURL = http://localhost:5000/api
+@token = 
+@username = testuser123
+@searchUser = john
 
-### Logout request
-POST http://localhost:5000/api/auth/logout
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIwMjdkNmFjMC0xNDVmLTQxYzctOWIwZi1mZWIwZDJiNjVlNTEiLCJlbWFpbCI6ImV4dHJhZW1haWw3MzYyOUBnbWFpbC5jb20iLCJzZXNzaW9uSWQiOiJtZHNrMmhvbW1uZGU3cjdpb20iLCJpYXQiOjE3NTQwMzY1NDF9.JL9RLK7jYVhcjv0GHWAwd_pKxOyWWkhQeDgrVl-r2Pk
-
-
+### Health Check
+GET {{baseURL}}/health
 
 ###
 
-POST http://localhost:5000/api/auth/login
+# ========================================
+# AUTHENTICATION ENDPOINTS
+# ========================================
+
+### 1. Check Username Availability (Public)
+GET {{baseURL}}/users/check-username/{{username}}
+
+###
+
+### 2. Signup New User
+POST {{baseURL}}/auth/signup
 Content-Type: application/json
 
 {
-  "email": "extraemail73629@gmail.com",
+  "email": "dummyuse.2678@gmail.com",
+  "password": "password123",
+  "name": "Test User",
+  "username": "{{username}}"
+}
+
+###
+
+### 3. Signup Another User (for testing search/QR)
+POST {{baseURL}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "john@example.com",
+  "password": "password123",
+  "name": "John Doe",
+  "username": "johndoe"
+}
+
+###
+
+### 4. Login User
+POST {{baseURL}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
   "password": "password123"
 }
 
-### Verify user
-GET http://localhost:5000/api/auth/verify
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIwMjdkNmFjMC0xNDVmLTQxYzctOWIwZi1mZWIwZDJiNjVlNTEiLCJlbWFpbCI6ImV4dHJhZW1haWw3MzYyOUBnbWFpbC5jb20iLCJzZXNzaW9uSWQiOiJtZHNrNHR5NWF6ajU3cGxqdnRyIiwiaWF0IjoxNzU0MDM2NjUxfQ.PPfUIrqJ7WnBxpN1WLe5PYhdP9I4GFCMibq3FokAz00
+###
+
+### 5. Login Second User
+POST {{baseURL}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "john@example.com",
+  "password": "password123"
+}
+
+###
+
+### 6. Verify Token (Replace @token with actual token from login)
+GET {{baseURL}}/auth/verify
+Authorization: Bearer {{token}}
+
+###
+
+### 7. Logout
+POST {{baseURL}}/auth/logout
+Authorization: Bearer {{token}}
+
+###
+
+# ========================================
+# USER ENDPOINTS (Need Authentication)
+# ========================================
+
+### 8. Get Current User Profile
+GET {{baseURL}}/users/profile
+Authorization: Bearer {{token}}
+
+###
+
+### 9. Get User by Username
+GET {{baseURL}}/users/username/johndoe
+Authorization: Bearer {{token}}
+
+###
+
+### 10. Search Users by Username
+GET {{baseURL}}/users/search?q={{searchUser}}&limit=5
+Authorization: Bearer {{token}}
+
+###
+
+### 11. Search Users (partial match)
+GET {{baseURL}}/users/search?q=test&limit=10
+Authorization: Bearer {{token}}
+
+###
+
+### 12. Scan QR Code
+POST {{baseURL}}/users/scan-qr
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "qrData": "chatapp://user/johndoe"
+}
+
+###
+
+### 13. Update User Profile
+PUT {{baseURL}}/users/profile
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "displayName": "Updated Test User"
+}
+
+###
+
+### 14. Check Username Availability (Different username)
+GET {{baseURL}}/users/check-username/newusername123
+
+###
+
+### 15. Check Reserved Username
+GET {{baseURL}}/users/check-username/admin
+
+###
+
+# ========================================
+# ERROR TESTING
+# ========================================
+
+### 16. Signup with Missing Fields
+POST {{baseURL}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "test2@example.com",
+  "password": "password123"
+}
+
+###
+
+### 17. Signup with Invalid Username
+POST {{baseURL}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "test3@example.com",
+  "password": "password123",
+  "name": "Test User 3",
+  "username": "ab"
+}
+
+###
+
+### 18. Signup with Duplicate Username
+POST {{baseURL}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "test4@example.com",
+  "password": "password123",
+  "name": "Test User 4",
+  "username": "{{username}}"
+}
+
+###
+
+### 19. Login with Wrong Password
+POST {{baseURL}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "wrongpassword"
+}
+
+###
+
+### 20. Access Protected Route Without Token
+GET {{baseURL}}/users/profile
+
+###
+
+### 21. Access Protected Route With Invalid Token
+GET {{baseURL}}/users/profile
+Authorization: Bearer invalid-token-here
+
+###
+
+### 22. Search with Empty Query
+GET {{baseURL}}/users/search?q=
+Authorization: Bearer {{token}}
+
+###
+
+### 23. Scan Invalid QR Code
+POST {{baseURL}}/users/scan-qr
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "qrData": "invalid://qr/code"
+}
+
+###
+
+### 24. Scan Own QR Code (should fail)
+POST {{baseURL}}/users/scan-qr
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "qrData": "chatapp://user/{{username}}"
+}
+
+###
+
+### 25. Get Non-existent User
+GET {{baseURL}}/users/username/nonexistentuser
+Authorization: Bearer {{token}}
+
+###
+
+# ========================================
+# BULK TESTING SEQUENCE
+# ========================================
+
+### 26. Complete Flow Test
+# Step 1: Signup
+POST {{baseURL}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "flowtest@example.com",
+  "password": "password123",
+  "name": "Flow Test User",
+  "username": "flowtest"
+}
+
+###
+
+# Step 2: Login (use token from signup or this login)
+POST {{baseURL}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "flowtest@example.com",
+  "password": "password123"
+}
+
+###
+
+# Step 3: Get Profile (use token from above)
+GET {{baseURL}}/users/profile
+Authorization: Bearer YOUR_TOKEN_HERE
+
+###
+
+# Step 4: Search for other users
+GET {{baseURL}}/users/search?q=john
+Authorization: Bearer YOUR_TOKEN_HERE
+
+###
+
+# Step 5: Scan QR
+POST {{baseURL}}/users/scan-qr
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "qrData": "chatapp://user/johndoe"
+}
+
+###
+
+# Step 6: Update Profile
+PUT {{baseURL}}/users/profile
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "displayName": "Updated Flow Test User"
+}
+
+###
+
+# Step 7: Logout
+POST {{baseURL}}/auth/logout
+Authorization: Bearer YOUR_TOKEN_HERE
+
+###

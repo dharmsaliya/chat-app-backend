@@ -1,11 +1,9 @@
 const jwt = require('jsonwebtoken');
-const { createClient } = require('@supabase/supabase-js');
+const { supabase } = require('../config/database');
+const UserService = require('../services/userService');
 
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
+// Per-user session management
+const userSessions = new Map(); // userId -> Set of session identifiers
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -21,27 +19,57 @@ const authMiddleware = async (req, res, next) => {
 
     // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const { userId, email, sessionId } = decoded;
 
-    // Get user from Supabase to ensure user still exists
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    // Check if this session is still active
+    if (!userSessions.has(userId) || !userSessions.get(userId).has(sessionId)) {
+      return res.status(401).json({
+        success: false,
+        message: 'Session has been invalidated. Please login again.'
+      });
+    }
 
-    if (error || !user) {
+    // Get user profile from our users table
+    try {
+      const userProfile = await UserService.getUserProfile(userId);
+      
+      // Add user info to request object
+      req.user = {
+        id: userProfile.id,
+        email: userProfile.email,
+        username: userProfile.username,
+        displayName: userProfile.display_name,
+        qrCodeData: userProfile.qr_code_data
+      };
+    } catch (error) {
+      // If user profile doesn't exist in our users table, 
+      // they might be using an old token from before the update
+      req.user = {
+        id: userId,
+        email: email,
+        username: null,
+        displayName: null,
+        qrCodeData: null
+      };
+    }
+
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    
+    // Handle specific JWT errors
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Token has expired'
+      });
+    } else if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({
         success: false,
         message: 'Invalid token'
       });
     }
 
-    // Add user info to request object
-    req.user = {
-      id: user.id,
-      email: user.email,
-      name: user.user_metadata.name
-    };
-
-    next();
-  } catch (error) {
-    console.error('Auth middleware error:', error);
     res.status(401).json({
       success: false,
       message: 'Invalid token'
@@ -49,4 +77,8 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-module.exports = authMiddleware;
+// Export session management functions for use in auth routes
+module.exports = {
+  authMiddleware,
+  userSessions
+};
