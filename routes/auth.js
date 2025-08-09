@@ -41,6 +41,7 @@ const generateToken = (userId, email) => {
 router.post('/signup', async (req, res) => {
   try {
     const { email, password, name, username } = req.body;
+    console.log("Signup attempted...")
 
     // Validation
     if (!email || !password || !name || !username) {
@@ -171,6 +172,7 @@ router.post('/signup', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+    console.log("Login attempted...")
 
     // Validation
     if (!email || !password) {
