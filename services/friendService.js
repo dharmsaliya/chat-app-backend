@@ -196,20 +196,43 @@ class FriendService {
   }
 
   // Check if two users are friends
+  // static async areUsersFriends(userId1, userId2) {
+  //   try {
+  //     const { data, error } = await supabase
+  //       .from('friendships')
+  //       .select('id')
+  //       .eq('user1_id', Math.min(userId1, userId2))
+  //       .eq('user2_id', Math.max(userId1, userId2))
+  //       .single();
+
+  //     if (error && error.code !== 'PGRST116') {
+  //       throw error;
+  //     }
+
+  //     return !!data;
+  //   } catch (error) {
+  //     console.error('Error checking friendship:', error);
+  //     return false;
+  //   }
+  // }
+
+  /** 
+* Checks if two users are friends. 
+* This corrected version avoids the UUID vs. String type issue by using a proper .or() 
+query 
+* instead of relying on Math.min/max. 
+*/
   static async areUsersFriends(userId1, userId2) {
     try {
       const { data, error } = await supabase
         .from('friendships')
         .select('id')
-        .eq('user1_id', Math.min(userId1, userId2))
-        .eq('user2_id', Math.max(userId1, userId2))
+        .or(`and(user1_id.eq.${userId1},user2_id.eq.${userId2}),and(user1_id.eq.${userId2},user2_id.eq.${userId1})`)
         .single();
-
-      if (error && error.code !== 'PGRST116') {
+      if (error && error.code !== 'PGRST116') { // PGRST116 means "not found" 
         throw error;
       }
-
-      return !!data;
+      return !!data; // Returns true if a record was found, false otherwise 
     } catch (error) {
       console.error('Error checking friendship:', error);
       return false;
