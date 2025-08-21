@@ -227,12 +227,29 @@ query
       const { data, error } = await supabase
         .from('friendships')
         .select('id')
-        .or(`and(user1_id.eq.${userId1},user2_id.eq.${userId2}),and(user1_id.eq.${userId2},user2_id.eq.${userId1})`)
-        .single();
-      if (error && error.code !== 'PGRST116') { // PGRST116 means "not found" 
+        .eq('user1_id', userId1)
+        .eq('user2_id', userId2);
+
+      if (error) {
         throw error;
       }
-      return !!data; // Returns true if a record was found, false otherwise 
+
+      if (data && data.length > 0) {
+        return true;
+      }
+
+      // Check the reverse direction
+      const { data: reverseData, error: reverseError } = await supabase
+        .from('friendships')
+        .select('id')
+        .eq('user1_id', userId2)
+        .eq('user2_id', userId1);
+
+      if (reverseError) {
+        throw reverseError;
+      }
+
+      return reverseData && reverseData.length > 0;
     } catch (error) {
       console.error('Error checking friendship:', error);
       return false;
