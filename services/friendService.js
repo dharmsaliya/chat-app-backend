@@ -222,39 +222,31 @@ class FriendService {
 query 
 * instead of relying on Math.min/max. 
 */
+  /**
+ * Checks if two users are friends.
+ * This is the definitive fix that respects the database's CHECK constraint
+ * by searching for the friendship in both possible directions within a single query.
+ */
   static async areUsersFriends(userId1, userId2) {
     try {
       const { data, error } = await supabase
         .from('friendships')
         .select('id')
-        .eq('user1_id', userId1)
-        .eq('user2_id', userId2);
+        .or(and(`user1_id.eq.${ userId1 }, user2_id.eq.${ userId2 }), and(user1_id.eq.${ userId2 }, user2_id.eq.${ userId1 }`))
+        .single();
 
-      if (error) {
+      if (error && error.code !== 'PGRST116') { // PGRST116 means "not found"
         throw error;
       }
 
-      if (data && data.length > 0) {
-        return true;
-      }
-
-      // Check the reverse direction
-      const { data: reverseData, error: reverseError } = await supabase
-        .from('friendships')
-        .select('id')
-        .eq('user1_id', userId2)
-        .eq('user2_id', userId1);
-
-      if (reverseError) {
-        throw reverseError;
-      }
-
-      return reverseData && reverseData.length > 0;
+      // If data is not null, a friendship was found.
+      return !!data;
     } catch (error) {
       console.error('Error checking friendship:', error);
       return false;
     }
   }
+
 
   // Get user's friends list
   static async getUserFriends(userId) {
