@@ -49,14 +49,40 @@ const handleConnection = (io) => {
       });
       userSockets.set(socket.id, userId);
 
-      // Update user's online status in database
-      await FriendService.updateUserOnlineStatus(userId, true);
+      // Update user's online status in database asynchronously [cite: 36]
+      FriendService.updateUserOnlineStatus(userId, true)
+        .catch(err => console.error('Failed to update online status:', err));
 
       // Join user to their personal room
       socket.join(`user_${userId}`);
 
+      // Fetch and emit offline messages [cite: 21, 22]
+      const offlineMessages = await FriendService.getOfflineMessages(userId);
+      const messageIdsToDelete = [];
+
+      if (offlineMessages.length > 0) {
+        console.log(`Delivering ${offlineMessages.length} offline messages to user ${userId}`);
+        
+        offlineMessages.forEach(message => {
+          io.to(`user_${userId}`).emit('new_message', {
+            messageUuid: message.message_uuid,
+            senderId: message.sender_id,
+            receiverId: message.receiver_id,
+            message: message.message_content,
+            timestamp: message.timestamp,
+            status: 'delivered'
+          });
+          messageIdsToDelete.push(message.id);
+        });
+        
+        // Delete messages from the offline table [cite: 24, 25]
+        FriendService.deleteOfflineMessages(messageIdsToDelete)
+          .catch(err => console.error('Failed to delete offline messages:', err));
+      }
+
       // Notify friends that user is online
-      await notifyFriendsStatusChange(io, userId, true);
+      notifyFriendsStatusChange(io, userId, true)
+        .catch(err => console.error('Failed to notify friends of status change:', err));
 
       // Handle direct message
       socket.on('send_message', async (data) => {
@@ -138,29 +164,22 @@ const handleSendMessage = async (io, socket, data) => {
     throw new Error('You can only send messages to friends');
   }
 
-  // Track message status as sent
-  await FriendService.trackMessageStatus(messageUuid, senderId, receiverId, 'sent');
-
-  // Prepare message data
-  const messageData = {
-    messageUuid,
-    senderId,
-    receiverId,
-    message,
-    messageType: messageType || 'text',
-    timestamp,
-    status: 'sent'
-  };
-
-  // Check if receiver is online
+  // Check if receiver is online [cite: 29]
   const receiverSocketInfo = onlineUsers.get(receiverId);
   
   if (receiverSocketInfo) {
-    // Receiver is online - send message immediately
+    // Receiver is online - send message immediately [cite: 30]
+    const messageData = {
+      messageUuid,
+      senderId,
+      receiverId,
+      message,
+      messageType: messageType || 'text',
+      timestamp,
+      status: 'delivered'
+    };
+
     io.to(`user_${receiverId}`).emit('new_message', messageData);
-    
-    // Update status to delivered
-    await FriendService.updateMessageStatus(messageUuid, 'delivered');
     
     // Notify sender that message was delivered
     socket.emit('message_status_update', {
@@ -168,9 +187,13 @@ const handleSendMessage = async (io, socket, data) => {
       status: 'delivered',
       timestamp: new Date().toISOString()
     });
+  } else {
+    // Receiver is offline - store message in the database [cite: 32]
+    await FriendService.storeOfflineMessage(senderId, receiverId, message, messageUuid);
+    console.log(`Stored offline message for user ${receiverId}: ${messageUuid}`);
   }
 
-  // Confirm message was sent
+  // Confirm message was sent to sender
   socket.emit('message_sent', {
     messageUuid,
     status: 'sent',
@@ -191,15 +214,9 @@ const handleMessageStatusUpdate = async (io, socket, data) => {
     throw new Error('Invalid status');
   }
 
-  // Update message status
-  const messageStatus = await FriendService.updateMessageStatus(messageUuid, status);
-  
-  // Notify the sender about status update
-  io.to(`user_${messageStatus.sender_id}`).emit('message_status_update', {
-    messageUuid,
-    status,
-    timestamp: messageStatus.timestamp
-  });
+  // This function is now responsible for updating the status on the client-side
+  // and notifying the other user, not the database.
+  // We'll rely on client-side logic to handle persistence.
 };
 
 // Handle typing start
@@ -290,11 +307,13 @@ const handleDisconnect = async (io, socket) => {
     onlineUsers.delete(userId);
     userSockets.delete(socket.id);
     
-    // Update user's online status in database
-    await FriendService.updateUserOnlineStatus(userId, false);
+    // Update user's online status in database asynchronously [cite: 36]
+    FriendService.updateUserOnlineStatus(userId, false)
+      .catch(err => console.error('Failed to update online status:', err));
     
     // Notify friends that user is offline
-    await notifyFriendsStatusChange(io, userId, false);
+    notifyFriendsStatusChange(io, userId, false)
+      .catch(err => console.error('Failed to notify friends of status change:', err));
   }
 };
 

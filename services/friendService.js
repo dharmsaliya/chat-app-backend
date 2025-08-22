@@ -195,33 +195,6 @@ class FriendService {
     }
   }
 
-  // Check if two users are friends
-  // static async areUsersFriends(userId1, userId2) {
-  //   try {
-  //     const { data, error } = await supabase
-  //       .from('friendships')
-  //       .select('id')
-  //       .eq('user1_id', Math.min(userId1, userId2))
-  //       .eq('user2_id', Math.max(userId1, userId2))
-  //       .single();
-
-  //     if (error && error.code !== 'PGRST116') {
-  //       throw error;
-  //     }
-
-  //     return !!data;
-  //   } catch (error) {
-  //     console.error('Error checking friendship:', error);
-  //     return false;
-  //   }
-  // }
-
-  /** 
-* Checks if two users are friends. 
-* This corrected version avoids the UUID vs. String type issue by using a proper .or() 
-query 
-* instead of relying on Math.min/max. 
-*/
   /**
  * Checks if two users are friends.
  * This is the definitive fix that respects the database's CHECK constraint
@@ -361,16 +334,16 @@ query
     }
   }
 
-  // Track message status
-  static async trackMessageStatus(messageUuid, senderId, receiverId, status = 'sent') {
+  // New functions to handle offline messages [cite: 42, 43, 44]
+  static async storeOfflineMessage(senderId, receiverId, messageContent, messageUuid) {
     try {
       const { data, error } = await supabase
-        .from('message_status')
-        .upsert([{
-          message_uuid: messageUuid,
+        .from('offline_messages')
+        .insert([{
           sender_id: senderId,
           receiver_id: receiverId,
-          status: status,
+          message_content: messageContent,
+          message_uuid: messageUuid,
           timestamp: new Date().toISOString()
         }])
         .select()
@@ -379,31 +352,45 @@ query
       if (error) throw error;
       return data;
     } catch (error) {
-      console.error('Error tracking message status:', error);
+      console.error('Error storing offline message:', error);
       throw error;
     }
   }
 
-  // Update message status
-  static async updateMessageStatus(messageUuid, status) {
+  static async getOfflineMessages(userId) {
     try {
       const { data, error } = await supabase
-        .from('message_status')
-        .update({
-          status: status,
-          timestamp: new Date().toISOString()
-        })
-        .eq('message_uuid', messageUuid)
-        .select()
-        .single();
+        .from('offline_messages')
+        .select('*')
+        .eq('receiver_id', userId)
+        .order('timestamp', { ascending: true });
 
       if (error) throw error;
-      return data;
+      return data || [];
     } catch (error) {
-      console.error('Error updating message status:', error);
+      console.error('Error fetching offline messages:', error);
+      throw error;
+    }
+  }
+
+  static async deleteOfflineMessages(messageIds) {
+    if (messageIds.length === 0) return;
+    try {
+      const { error } = await supabase
+        .from('offline_messages')
+        .delete()
+        .in('id', messageIds);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error deleting offline messages:', error);
       throw error;
     }
   }
 }
+
+// Remove old message status functions [cite: 45]
+// `trackMessageStatus` and `updateMessageStatus` are no longer needed
+// as message status will be managed on the client side.
 
 module.exports = FriendService;
