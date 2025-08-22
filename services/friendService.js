@@ -205,7 +205,7 @@ class FriendService {
       const { data, error } = await supabase
         .from('friendships')
         .select('id')
-        .or(and(`user1_id.eq.${ userId1 }, user2_id.eq.${ userId2 }), and(user1_id.eq.${ userId2 }, user2_id.eq.${ userId1 }`))
+        .or(`and(user1_id.eq.${ userId1 }, user2_id.eq.${ userId2 }), and(user1_id.eq.${ userId2 }, user2_id.eq.${ userId1 })`)
         .single();
 
       if (error && error.code !== 'PGRST116') { // PGRST116 means "not found"
