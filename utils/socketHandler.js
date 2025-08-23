@@ -1,365 +1,301 @@
+// chat-app-backend/utils/socketHandler.js
 const jwt = require('jsonwebtoken');
 const { userSessions } = require('../middleware/auth');
 const FriendService = require('../services/friendService');
 
-// Store online users and their socket connections
-const onlineUsers = new Map(); // userId -> { socketId, userInfo }
-const userSockets = new Map(); // socketId -> userId
-
-// Socket authentication middleware
+/**
+ * Socket authentication middleware
+ * - Verifies JWT from socket.handshake.auth.token
+ * - Ensures session is still active (userSessions)
+ * - Attaches userId, sessionId to socket
+ */
 const authenticateSocket = async (socket, next) => {
   try {
-    const token = socket.handshake.auth.token;
-    
-    if (!token) {
-      return next(new Error('Authentication token required'));
-    }
+    const token = socket.handshake.auth?.token;
+    if (!token) return next(new Error('Authentication token required'));
 
-    // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const { userId, sessionId } = decoded;
 
-    // Check if session is still active
     if (!userSessions.has(userId) || !userSessions.get(userId).has(sessionId)) {
       return next(new Error('Session has been invalidated'));
     }
 
-    // Attach user info to socket
     socket.userId = userId;
     socket.sessionId = sessionId;
-    
     next();
-  } catch (error) {
-    console.error('Socket authentication error:', error);
+  } catch (err) {
+    console.error('Socket authentication error:', err);
     next(new Error('Authentication failed'));
   }
 };
 
-// Handle socket connection
+/**
+ * Helper: returns current size of a room (number of sockets currently joined)
+ */
+const getRoomSize = (io, roomName) => {
+  const room = io.sockets.adapter.rooms.get(roomName);
+  return room ? room.size : 0;
+};
+
+/**
+ * Handle new socket connection
+ * - Joins personal room (user_<userId>)
+ * - Updates DB online status
+ * - Delivers & clears offline messages
+ * - Wires up all event listeners
+ */
 const handleConnection = (io) => {
   return async (socket) => {
     try {
       const userId = socket.userId;
+      const room = `user_${userId}`;
       console.log(`User ${userId} connected with socket ${socket.id}`);
 
-      // --- FIX: Ensure consistency by removing any old entry first ---
-      if (onlineUsers.has(userId)) {
-          console.log(`[FIX] User ${userId} was already in onlineUsers. Removing old entry before adding new one.`);
-          onlineUsers.delete(userId);
-      }
+      // Join personal room immediately (core of the fix)
+      socket.join(room);
 
-      // Store user's socket connection
-      onlineUsers.set(userId, {
-        socketId: socket.id,
-        connectedAt: new Date().toISOString()
-      });
-      userSockets.set(socket.id, userId);
-
-      // Update user's online status in database asynchronously [cite: 36]
+      // Mark online (async fire-and-forget)
       FriendService.updateUserOnlineStatus(userId, true)
         .catch(err => console.error('Failed to update online status:', err));
 
-      // Join user to their personal room
-      socket.join(`user_${userId}`);
+      // Deliver any offline messages waiting for this user
+      try {
+        const offlineMessages = await FriendService.getOfflineMessages(userId);
+        if (offlineMessages?.length) {
+          console.log(`Delivering ${offlineMessages.length} offline messages to user ${userId}`);
+          const idsToDelete = [];
 
-      // Fetch and emit offline messages [cite: 21, 22]
-      const offlineMessages = await FriendService.getOfflineMessages(userId);
-      const messageIdsToDelete = [];
-
-      if (offlineMessages.length > 0) {
-        console.log(`Delivering ${offlineMessages.length} offline messages to user ${userId}`);
-        
-        offlineMessages.forEach(message => {
-          io.to(`user_${userId}`).emit('new_message', {
-            messageUuid: message.message_uuid,
-            senderId: message.sender_id,
-            receiverId: message.receiver_id,
-            message: message.message_content,
-            timestamp: message.timestamp,
-            status: 'delivered'
+          offlineMessages.forEach(m => {
+            io.to(room).emit('new_message', {
+              messageUuid: m.message_uuid,
+              senderId: m.sender_id,
+              receiverId: m.receiver_id,
+              message: m.message_content,
+              messageType: m.message_type || 'text',
+              timestamp: m.timestamp,
+              status: 'delivered',
+            });
+            idsToDelete.push(m.id);
           });
-          messageIdsToDelete.push(message.id);
-        });
-        
-        // Delete messages from the offline table [cite: 24, 25]
-        FriendService.deleteOfflineMessages(messageIdsToDelete)
-          .catch(err => console.error('Failed to delete offline messages:', err));
+
+          // Remove them now that we've delivered
+          if (idsToDelete.length) {
+            FriendService.deleteOfflineMessages(idsToDelete)
+              .catch(err => console.error('Failed to delete offline messages:', err));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch/deliver offline messages:', err);
       }
 
-      // Notify friends that user is online
+      // Notify friends this user is online
       notifyFriendsStatusChange(io, userId, true)
         .catch(err => console.error('Failed to notify friends of status change:', err));
 
-      // Handle direct message
-      socket.on('send_message', async (data) => {
-        try {
-          await handleSendMessage(io, socket, data);
-        } catch (error) {
-          console.error('Send message error:', error);
-          socket.emit('message_error', {
-            error: 'Failed to send message',
-            messageUuid: data.messageUuid
-          });
-        }
-      });
+      // Event: send message
+      socket.on('send_message', (data) => handleSendMessage(io, socket, data));
 
-      // Handle message status updates (delivered, read)
-      socket.on('update_message_status', async (data) => {
-        try {
-          await handleMessageStatusUpdate(io, socket, data);
-        } catch (error) {
-          console.error('Message status update error:', error);
-        }
-      });
+      // Event: message status updates (delivered/read)
+      socket.on('update_message_status', (data) => handleMessageStatusUpdate(io, socket, data));
 
-      // Handle typing indicator
-      socket.on('typing_start', async (data) => {
-        try {
-          await handleTypingStart(io, socket, data);
-        } catch (error) {
-          console.error('Typing start error:', error);
-        }
-      });
+      // Typing indicators
+      socket.on('typing_start', (data) => handleTypingStart(io, socket, data));
+      socket.on('typing_stop',  (data) => handleTypingStop(io, socket, data));
 
-      socket.on('typing_stop', async (data) => {
-        try {
-          await handleTypingStop(io, socket, data);
-        } catch (error) {
-          console.error('Typing stop error:', error);
-        }
-      });
+      // Friend request notifications
+      socket.on('friend_request_sent', (data) => handleFriendRequestNotification(io, socket, data));
 
-      // Handle friend request notifications
-      socket.on('friend_request_sent', async (data) => {
-        try {
-          await handleFriendRequestNotification(io, socket, data);
-        } catch (error) {
-          console.error('Friend request notification error:', error);
-        }
-      });
+      // Disconnect
+      socket.on('disconnect', () => handleDisconnect(io, socket));
 
-      // Handle disconnect
-      socket.on('disconnect', async () => {
-        try {
-          await handleDisconnect(io, socket);
-        } catch (error) {
-          console.error('Disconnect handling error:', error);
-        }
-      });
-
-    } catch (error) {
-      console.error('Connection handling error:', error);
+    } catch (err) {
+      console.error('Connection handling error:', err);
       socket.disconnect();
     }
   };
 };
 
+/**
+ * Send message handler
+ * - Validates friendship
+ * - Emits directly to receiver's room
+ * - Stores as "offline" ONLY if receiver currently has no sockets in their room
+ * - Confirms to sender
+ */
 const handleSendMessage = async (io, socket, data) => {
-  const { receiverId, messageUuid, message, messageType, timestamp } = data;
+  const { receiverId, messageUuid, message, messageType, timestamp } = data || {};
   const senderId = socket.userId;
 
   console.log(`[MSG] Received 'send_message' from ${senderId} to ${receiverId}.`);
 
   try {
-    // 1. Friendship Check
+    if (!receiverId || !messageUuid || typeof message === 'undefined') {
+      throw new Error('Missing required fields (receiverId, messageUuid, message)');
+    }
+
+    // 1) Friendship check
     const areFriends = await FriendService.areUsersFriends(senderId, receiverId);
-    if (!areFriends) {
-      throw new Error('Message blocked: Users are not friends.');
-    }
-    console.log(`[MSG] Friendship validated for ${senderId} and ${receiverId}.`);
+    if (!areFriends) throw new Error('Message blocked: Users are not friends.');
+    console.log(`[MSG] Friendship validated for ${senderId} → ${receiverId}.`);
 
-    // 2. Online Status Check
-    const receiverSocketInfo = onlineUsers.get(receiverId);
-    console.log(`[MSG] Checking online status for receiver ${receiverId}...`);
-    console.log(`[MSG] Current online users:`, Array.from(onlineUsers.keys()));
+    // 2) Core fix: emit to receiver's personal room (no dependence on in-memory maps)
+    const receiverRoom = `user_${receiverId}`;
+    const payload = {
+      messageUuid,
+      senderId,
+      receiverId,
+      message,
+      messageType: messageType || 'text',
+      timestamp,
+      status: 'delivered',
+    };
+    io.to(receiverRoom).emit('new_message', payload);
+    console.log(`[MSG] Emitted to room ${receiverRoom}.`);
 
-    if (receiverSocketInfo) {
-      // 3a. Real-Time Path (User is ONLINE)
-      console.log(`[MSG] Receiver ${receiverId} FOUND in onlineUsers. Emitting 'new_message' directly.`);
-      const messageData = {
-        messageUuid,
-        senderId,
-        receiverId,
-        message,
-        messageType: messageType || 'text',
-        timestamp,
-        status: 'delivered'
-      };
-      io.to(`user_${receiverId}`).emit('new_message', messageData);
-
-    } else {
-      // 3b. Offline Path (User is OFFLINE)
-      console.log(`[MSG] Receiver ${receiverId} NOT FOUND in onlineUsers. Storing message for offline delivery.`);
-      await FriendService.storeOfflineMessage(senderId, receiverId, message, messageUuid);
-      // This log is now correctly inside the 'else' block
-      console.log(`[MSG] Stored offline message for user ${receiverId}.`);
+    // 3) Offline fallback: if no socket currently in the room, store offline
+    const roomSize = getRoomSize(io, receiverRoom);
+    if (roomSize === 0) {
+      console.log(`[MSG] Room ${receiverRoom} empty. Storing offline message.`);
+      await FriendService.storeOfflineMessage(senderId, receiverId, message, messageUuid, messageType);
     }
 
-    // 4. Send confirmation back to the original sender
+    // 4) Ack back to sender
     socket.emit('message_sent', {
       messageUuid,
       status: 'sent',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-    console.log(`[MSG] Sent 'message_sent' confirmation to sender ${senderId}.`);
+    console.log(`[MSG] Sent 'message_sent' to ${senderId}.`);
 
-  } catch (error) {
-    console.error('[MSG] Error in handleSendMessage:', error.message);
-    socket.emit('message_error', {
-      error: error.message,
-      messageUuid: data.messageUuid
-    });
+  } catch (err) {
+    console.error('[MSG] Error in handleSendMessage:', err.message);
+    socket.emit('message_error', { error: err.message, messageUuid });
   }
 };
 
-
+/**
+ * Message status update handler (delivered/read)
+ * - Forwards to original sender's room
+ */
 const handleMessageStatusUpdate = async (io, socket, data) => {
-  const { messageUuid, status, senderId } = data; // senderId is the original sender
-  const userId = socket.userId; // This is the user who is providing the update (the receiver)
+  const { messageUuid, status, senderId } = data || {};
+  const updatedBy = socket.userId;
 
-  if (!messageUuid || !status || !senderId) {
-    throw new Error('Missing required fields for status update');
+  try {
+    if (!messageUuid || !status || !senderId) {
+      throw new Error('Missing required fields for status update');
+    }
+
+    io.to(`user_${senderId}`).emit('message_status_update', {
+      messageUuid,
+      status,
+      updatedBy,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('Message status update error:', err);
   }
-
-  // --- FIX: Relay the update to the original sender's personal room ---
-  io.to(`user_${senderId}`).emit('message_status_update', {
-    messageUuid,
-    status,
-    // Let the sender know who confirmed the status (useful for group chats later)
-    updatedBy: userId 
-  });
 };
 
-// Handle typing start
+/**
+ * Typing start
+ */
 const handleTypingStart = async (io, socket, data) => {
-  const { receiverId } = data;
+  const { receiverId } = data || {};
   const senderId = socket.userId;
 
-  if (!receiverId) {
-    throw new Error('Receiver ID required');
-  }
+  try {
+    if (!receiverId) throw new Error('Receiver ID required');
+    const areFriends = await FriendService.areUsersFriends(senderId, receiverId);
+    if (!areFriends) return;
 
-  // Check if users are friends
-  const areFriends = await FriendService.areUsersFriends(senderId, receiverId);
-  if (!areFriends) {
-    return;
+    io.to(`user_${receiverId}`).emit('user_typing', { userId: senderId, isTyping: true });
+  } catch (err) {
+    console.error('Typing start error:', err);
   }
-
-  // Notify receiver that sender is typing
-  io.to(`user_${receiverId}`).emit('user_typing', {
-    userId: senderId,
-    isTyping: true
-  });
 };
 
-// Handle typing stop
+/**
+ * Typing stop
+ */
 const handleTypingStop = async (io, socket, data) => {
-  const { receiverId } = data;
+  const { receiverId } = data || {};
   const senderId = socket.userId;
 
-  if (!receiverId) {
-    throw new Error('Receiver ID required');
-  }
+  try {
+    if (!receiverId) throw new Error('Receiver ID required');
+    const areFriends = await FriendService.areUsersFriends(senderId, receiverId);
+    if (!areFriends) return;
 
-  // Check if users are friends
-  const areFriends = await FriendService.areUsersFriends(senderId, receiverId);
-  if (!areFriends) {
-    return;
+    io.to(`user_${receiverId}`).emit('user_typing', { userId: senderId, isTyping: false });
+  } catch (err) {
+    console.error('Typing stop error:', err);
   }
-
-  // Notify receiver that sender stopped typing
-  io.to(`user_${receiverId}`).emit('user_typing', {
-    userId: senderId,
-    isTyping: false
-  });
 };
 
-// Handle friend request notification
+/**
+ * Friend request notification
+ */
 const handleFriendRequestNotification = async (io, socket, data) => {
-  const { receiverId, requestId } = data;
+  const { receiverId, requestId } = data || {};
+  try {
+    if (!receiverId || !requestId) throw new Error('Receiver ID and request ID required');
 
-  if (!receiverId || !requestId) {
-    throw new Error('Receiver ID and request ID required');
+    io.to(`user_${receiverId}`).emit('friend_request_received', {
+      requestId,
+      senderId: socket.userId,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('Friend request notification error:', err);
   }
-
-  // Notify receiver about new friend request
-  io.to(`user_${receiverId}`).emit('friend_request_received', {
-    requestId,
-    senderId: socket.userId,
-    timestamp: new Date().toISOString()
-  });
 };
 
-// Notify friends about user's online status change
+/**
+ * Notify friends of a user's online/offline status change
+ */
 const notifyFriendsStatusChange = async (io, userId, isOnline) => {
   try {
     const friends = await FriendService.getUserFriends(userId);
-    
     friends.forEach(friend => {
       io.to(`user_${friend.friendId}`).emit('friend_status_update', {
         friendId: userId,
         isOnline,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     });
-  } catch (error) {
-    console.error('Error notifying friends about status change:', error);
+  } catch (err) {
+    console.error('Error notifying friends about status change:', err);
   }
 };
 
-// Handle disconnect
+/**
+ * Disconnect handler
+ * - Marks offline in DB
+ * - Notifies friends
+ * (No in-memory maps to clean anymore)
+ */
 const handleDisconnect = async (io, socket) => {
   const userId = socket.userId;
-  
-  if (userId) {
+  if (!userId) return;
+
+  try {
     console.log(`User ${userId} disconnected`);
-    
-    // Remove from online users
-    onlineUsers.delete(userId);
-    userSockets.delete(socket.id);
-    
-    // Update user's online status in database asynchronously [cite: 36]
+
+    // Mark offline (async)
     FriendService.updateUserOnlineStatus(userId, false)
       .catch(err => console.error('Failed to update online status:', err));
-    
-    // Notify friends that user is offline
+
+    // Notify friends
     notifyFriendsStatusChange(io, userId, false)
       .catch(err => console.error('Failed to notify friends of status change:', err));
+  } catch (err) {
+    console.error('Disconnect handling error:', err);
   }
-};
-
-// Get online friends for a user
-const getOnlineFriends = async (userId) => {
-  try {
-    const friends = await FriendService.getUserFriends(userId);
-    const onlineFriends = friends.filter(friend => onlineUsers.has(friend.friendId));
-    
-    return onlineFriends.map(friend => ({
-      friendId: friend.friendId,
-      username: friend.username,
-      displayName: friend.displayName,
-      isOnline: true
-    }));
-  } catch (error) {
-    console.error('Error getting online friends:', error);
-    return [];
-  }
-};
-
-// Utility function to get user's socket
-const getUserSocket = (io, userId) => {
-  const userInfo = onlineUsers.get(userId);
-  if (userInfo) {
-    return io.sockets.sockets.get(userInfo.socketId);
-  }
-  return null;
 };
 
 module.exports = {
   authenticateSocket,
   handleConnection,
-  getOnlineFriends,
-  getUserSocket,
-  onlineUsers,
-  userSockets
 };
