@@ -212,22 +212,22 @@ const handleSendMessage = async (io, socket, data) => {
   }
 };
 
-// Handle message status updates
+
 const handleMessageStatusUpdate = async (io, socket, data) => {
-  const { messageUuid, status } = data;
-  const userId = socket.userId;
+  const { messageUuid, status, senderId } = data; // senderId is the original sender
+  const userId = socket.userId; // This is the user who is providing the update (the receiver)
 
-  if (!messageUuid || !status) {
-    throw new Error('Missing message UUID or status');
+  if (!messageUuid || !status || !senderId) {
+    throw new Error('Missing required fields for status update');
   }
 
-  if (!['delivered', 'read'].includes(status)) {
-    throw new Error('Invalid status');
-  }
-
-  // This function is now responsible for updating the status on the client-side
-  // and notifying the other user, not the database.
-  // We'll rely on client-side logic to handle persistence.
+  // --- FIX: Relay the update to the original sender's personal room ---
+  io.to(`user_${senderId}`).emit('message_status_update', {
+    messageUuid,
+    status,
+    // Let the sender know who confirmed the status (useful for group chats later)
+    updatedBy: userId 
+  });
 };
 
 // Handle typing start
