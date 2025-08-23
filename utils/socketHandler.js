@@ -148,57 +148,60 @@ const handleConnection = (io) => {
   };
 };
 
-// Handle sending a message
 const handleSendMessage = async (io, socket, data) => {
   const { receiverId, messageUuid, message, messageType, timestamp } = data;
   const senderId = socket.userId;
+  console.log(`[MSG] Received 'send_message' from ${senderId} to ${receiverId}.`);
 
-  // Validate required fields
-  if (!receiverId || !messageUuid || !message || !timestamp) {
-    throw new Error('Missing required message fields');
-  }
+  try {
+    // 1. Friendship Check
+    const areFriends = await FriendService.areUsersFriends(senderId, receiverId);
+    if (!areFriends) {
+      throw new Error('Message blocked: Users are not friends.');
+    }
+    console.log(`[MSG] Friendship validated for ${senderId} and ${receiverId}.`);
 
-  // Check if users are friends
-  const areFriends = await FriendService.areUsersFriends(senderId, receiverId);
-  if (!areFriends) {
-    throw new Error('You can only send messages to friends');
-  }
+    // 2. Online Status Check - THIS IS THE KEY DEBUGGING STEP
+    const receiverSocketInfo = onlineUsers.get(receiverId);
+    console.log(`[MSG] Checking online status for receiver ${receiverId}...`);
+    // Log the entire onlineUsers map to see who the server thinks is online.
+    console.log(`[MSG] Current online users:`, Array.from(onlineUsers.keys()));
 
-  // Check if receiver is online [cite: 29]
-  const receiverSocketInfo = onlineUsers.get(receiverId);
-  
-  if (receiverSocketInfo) {
-    // Receiver is online - send message immediately [cite: 30]
-    const messageData = {
+    if (receiverSocketInfo) {
+      // 3a. Real-Time Path
+      console.log(`[MSG] Receiver ${receiverId} FOUND in onlineUsers. Emitting 'new_message' directly.`);
+      const messageData = {
+        messageUuid,
+        senderId,
+        receiverId,
+        message,
+        messageType: messageType || 'text',
+        timestamp,
+        status: 'delivered'
+      };
+      io.to(`user_${receiverId}`).emit('new_message', messageData);
+    } else {
+      // 3b. Offline Path
+      console.log(`[MSG] Receiver ${receiverId} NOT FOUND in onlineUsers. Storing message for offline delivery.`);
+      await FriendService.storeOfflineMessage(senderId, receiverId, message, messageUuid);
+    }
+    console.log(`[MSG] Stored offline message for user ${receiverId}.`);
+
+    // 4. Send confirmation back to the original sender
+    socket.emit('message_sent', {
       messageUuid,
-      senderId,
-      receiverId,
-      message,
-      messageType: messageType || 'text',
-      timestamp,
-      status: 'delivered'
-    };
-
-    io.to(`user_${receiverId}`).emit('new_message', messageData);
-    
-    // Notify sender that message was delivered
-    socket.emit('message_status_update', {
-      messageUuid,
-      status: 'delivered',
+      status: 'sent',
       timestamp: new Date().toISOString()
     });
-  } else {
-    // Receiver is offline - store message in the database [cite: 32]
-    await FriendService.storeOfflineMessage(senderId, receiverId, message, messageUuid);
-    console.log(`Stored offline message for user ${receiverId}: ${messageUuid}`);
-  }
+    console.log(`[MSG] Sent 'message_sent' confirmation to sender ${senderId}.`);
 
-  // Confirm message was sent to sender
-  socket.emit('message_sent', {
-    messageUuid,
-    status: 'sent',
-    timestamp: new Date().toISOString()
-  });
+  } catch (error) {
+    console.error('[MSG] Error in handleSendMessage:', error.message);
+    socket.emit('message_error', {
+      error: error.message,
+      messageUuid: data.messageUuid
+    });
+  }
 };
 
 // Handle message status updates
