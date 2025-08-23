@@ -42,6 +42,12 @@ const handleConnection = (io) => {
       const userId = socket.userId;
       console.log(`User ${userId} connected with socket ${socket.id}`);
 
+      // --- FIX: Ensure consistency by removing any old entry first ---
+      if (onlineUsers.has(userId)) {
+          console.log(`[FIX] User ${userId} was already in onlineUsers. Removing old entry before adding new one.`);
+          onlineUsers.delete(userId);
+      }
+
       // Store user's socket connection
       onlineUsers.set(userId, {
         socketId: socket.id,
@@ -151,6 +157,7 @@ const handleConnection = (io) => {
 const handleSendMessage = async (io, socket, data) => {
   const { receiverId, messageUuid, message, messageType, timestamp } = data;
   const senderId = socket.userId;
+
   console.log(`[MSG] Received 'send_message' from ${senderId} to ${receiverId}.`);
 
   try {
@@ -161,14 +168,13 @@ const handleSendMessage = async (io, socket, data) => {
     }
     console.log(`[MSG] Friendship validated for ${senderId} and ${receiverId}.`);
 
-    // 2. Online Status Check - THIS IS THE KEY DEBUGGING STEP
+    // 2. Online Status Check
     const receiverSocketInfo = onlineUsers.get(receiverId);
     console.log(`[MSG] Checking online status for receiver ${receiverId}...`);
-    // Log the entire onlineUsers map to see who the server thinks is online.
     console.log(`[MSG] Current online users:`, Array.from(onlineUsers.keys()));
 
     if (receiverSocketInfo) {
-      // 3a. Real-Time Path
+      // 3a. Real-Time Path (User is ONLINE)
       console.log(`[MSG] Receiver ${receiverId} FOUND in onlineUsers. Emitting 'new_message' directly.`);
       const messageData = {
         messageUuid,
@@ -180,12 +186,14 @@ const handleSendMessage = async (io, socket, data) => {
         status: 'delivered'
       };
       io.to(`user_${receiverId}`).emit('new_message', messageData);
+
     } else {
-      // 3b. Offline Path
+      // 3b. Offline Path (User is OFFLINE)
       console.log(`[MSG] Receiver ${receiverId} NOT FOUND in onlineUsers. Storing message for offline delivery.`);
       await FriendService.storeOfflineMessage(senderId, receiverId, message, messageUuid);
+      // This log is now correctly inside the 'else' block
+      console.log(`[MSG] Stored offline message for user ${receiverId}.`);
     }
-    console.log(`[MSG] Stored offline message for user ${receiverId}.`);
 
     // 4. Send confirmation back to the original sender
     socket.emit('message_sent', {
