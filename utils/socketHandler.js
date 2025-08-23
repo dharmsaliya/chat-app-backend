@@ -179,22 +179,32 @@ const handleSendMessage = async (io, socket, data) => {
  * - Forwards to original sender's room
  */
 const handleMessageStatusUpdate = async (io, socket, data) => {
-  const { messageUuid, status, senderId } = data || {};
+  const { messageUuid, status, senderId } = data;
   const updatedBy = socket.userId;
+
+  // --- [STEP 2: SERVER RECEIVES] ---
+  console.log(`[STATUS] Received 'update_message_status' from user ${updatedBy}`);
+  console.log(`[STATUS] Details: message ${messageUuid} is now '${status}'. Original sender: ${senderId}`);
+  // ---------------------------------
 
   try {
     if (!messageUuid || !status || !senderId) {
       throw new Error('Missing required fields for status update');
     }
 
-    io.to(`user_${senderId}`).emit('message_status_update', {
+    // --- [STEP 3: SERVER RELAYS] ---
+    const targetRoom = `user_${senderId}`;
+    console.log(`[STATUS] Relaying update to room: ${targetRoom}`);
+    // -------------------------------
+    
+    io.to(targetRoom).emit('message_status_update', {
       messageUuid,
       status,
       updatedBy,
-      timestamp: new Date().toISOString(),
     });
-  } catch (err) {
-    console.error('Message status update error:', err);
+
+  } catch (error) {
+    console.error('[STATUS] Error in handleMessageStatusUpdate:', error.message);
   }
 };
 
