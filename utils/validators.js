@@ -33,10 +33,20 @@ const isValidName = (name) => {
   return name && name.trim().length >= 1 && name.trim().length <= 50;
 };
 
+const isValidURL = (url) => {
+  try {
+    new URL(url);
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
 module.exports = {
   isValidEmail,
   isValidUsername,
   isReservedUsername,
   isValidPassword,
-  isValidName
+  isValidName,
+  isValidURL
 };

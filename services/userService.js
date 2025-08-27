@@ -10,12 +10,12 @@ class UserService {
         .select('id')
         .eq('username', username.toLowerCase())
         .single();
-      
+
       if (error && error.code !== 'PGRST116') {
         // PGRST116 is "not found" error, which is what we want
         throw error;
       }
-      
+
       return !!data; // Returns true if user exists
     } catch (error) {
       console.error('Error checking username availability:', error);
@@ -27,7 +27,7 @@ class UserService {
   static async createUserProfile(userId, email, username, name) {
     try {
       const qrCodeData = generateQRData(username);
-      
+
       const { data, error } = await supabase
         .from('users')
         .insert([
@@ -60,7 +60,14 @@ class UserService {
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('*')
+        .select(`
+          *,
+          profile: user_profiles(*),
+          education: education(*),
+          skills: skills(*),
+          work_experience: work_experience(*),
+          contact_urls: contact_urls(*)
+        `)
         .eq('id', userId)
         .single();
 
@@ -124,7 +131,7 @@ class UserService {
     try {
       const allowedUpdates = ['display_name'];
       const filteredUpdates = {};
-      
+
       // Only allow certain fields to be updated
       Object.keys(updates).forEach(key => {
         if (allowedUpdates.includes(key)) {
