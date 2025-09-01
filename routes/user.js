@@ -283,4 +283,35 @@ router.get('/check-username/:username', async (req, res) => {
   }
 });
 
+// @route   GET /api/users/profile/:userId
+// @desc    Get a user's profile by ID
+// @access  Private
+router.get('/profile/:userId', authMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // In a production app, you might add a check here to ensure
+    // the requester and the requested user are friends.
+
+    const userProfile = await UserService.getUserProfile(userId);
+    
+    if (!userProfile) {
+        return res.status(404).json({ success: false, message: 'User profile not found' });
+    }
+
+    // Note: The service layer returns the full profile, which is what we need.
+    res.json({
+      success: true,
+      user: userProfile
+    });
+
+  } catch (error) {
+    console.error('Get profile by ID error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user profile'
+    });
+  }
+});
+
 module.exports = router;
