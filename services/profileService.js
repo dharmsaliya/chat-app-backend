@@ -36,7 +36,7 @@ class ProfileService {
   // --- Education ---
   static async addEducation(userId, educationData) {
     try {
-      // THE FIX: Be explicit about the columns to prevent schema errors.
+      // THE FIX: Explicitly destructure the object to ensure correct columns.
       const { institution, degree, field_of_study, start_date, end_date } = educationData;
       const { data, error } = await supabase
         .from('education')
@@ -82,11 +82,11 @@ class ProfileService {
   // --- Skills ---
   static async addSkill(userId, skillData) {
     try {
-      // THE FIX: Be explicit about the columns.
+      // THE FIX: Explicitly destructure the object.
       const { title, level } = skillData;
       const { data, error } = await supabase
         .from('skills')
-        .insert({ user_id: userId, title, level }) // Level will now be lowercase from Flutter
+        .insert({ user_id: userId, title, level }) // The level will now be lowercase from Flutter.
         .select()
         .single();
       if (error) throw error;
@@ -110,7 +110,7 @@ class ProfileService {
   // --- Work Experience ---
   static async addWorkExperience(userId, workData) {
     try {
-      // THE FIX: Be explicit about the columns to prevent schema errors.
+      // THE FIX: Explicitly destructure the object to prevent schema cache errors.
       const { company, title, start_date, end_date, description } = workData;
       const { data, error } = await supabase
         .from('work_experience')
