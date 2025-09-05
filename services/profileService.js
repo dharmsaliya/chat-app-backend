@@ -107,38 +107,48 @@ class ProfileService {
     }
   }
 
-  // --- Work Experience ---
+// --- Work Experience ---
   static async addWorkExperience(userId, workData) {
     try {
-      // THE FIX: Explicitly destructure the object to prevent schema cache errors.
-      const { company, title, start_date, end_date, description } = workData;
+      // FINAL FIX: Destructure 'job_title' from the incoming data, not 'title'.
+      const { company, job_title, start_date, end_date, description, employment_type, location } = workData;
       const { data, error } = await supabase
         .from('work_experience')
-        .insert({ user_id: userId, company, title, start_date, end_date, description })
+        // FINAL FIX: Insert the correct 'job_title' field into the database.
+        .insert({ user_id: userId, company, job_title, start_date, end_date, description, employment_type, location })
         .select()
         .single();
-      if (error) throw error;
+      if (error) {
+        // Log the detailed error for better debugging on the server.
+        console.error('Error adding work experience:', error);
+        throw error;
+      }
       return data;
     } catch (error) {
-      console.error('Error adding work experience:', error);
+      console.error('Error in addWorkExperience service:', error);
       throw error;
     }
   }
   
   static async updateWorkExperience(workId, userId, workData) {
     try {
-      const { company, title, start_date, end_date, description } = workData;
+      // FINAL FIX: Destructure 'job_title' for the update as well.
+      const { company, job_title, start_date, end_date, description, employment_type, location } = workData;
       const { data, error } = await supabase
         .from('work_experience')
-        .update({ company, title, start_date, end_date, description })
+        // FINAL FIX: Update the correct 'job_title' field.
+        .update({ company, job_title, start_date, end_date, description, employment_type, location })
         .eq('id', workId)
         .eq('user_id', userId)
         .select()
         .single();
-      if (error) throw error;
+      if (error) {
+        console.error('Error updating work experience:', error);
+        throw error;
+      }
       return data;
     } catch (error) {
-      console.error('Error updating work experience:', error);
+      console.error('Error in updateWorkExperience service:', error);
       throw error;
     }
   }
