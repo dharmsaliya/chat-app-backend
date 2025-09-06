@@ -2,7 +2,6 @@ const { supabase } = require('../config/database');
 
 class ProfileService {
   // --- Profile ---
-// --- Profile ---
   static async upsertProfile(userId, profileData) {
     try {
       // FINAL FIX: Destructure all possible fields to allow partial updates.
@@ -10,22 +9,6 @@ class ProfileService {
       const { data, error } = await supabase
         .from('user_profiles')
         .upsert({ id: userId, headline, about_me, age, location }, { onConflict: 'id' })
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
-    } catch (error) {
-      console.error('Error upserting user profile:', error);
-      throw error;
-    }
-  }
-
-  static async upsertProfile(userId, profileData) {
-    try {
-      const { headline, about_me } = profileData; // Destructure to ensure only valid fields are sent
-      const { data, error } = await supabase
-        .from('user_profiles')
-        .upsert({ id: userId, headline, about_me }, { onConflict: 'id' })
         .select()
         .single();
       if (error) throw error;
