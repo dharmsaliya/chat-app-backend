@@ -2,17 +2,20 @@ const { supabase } = require('../config/database');
 
 class ProfileService {
   // --- Profile ---
-  static async getProfile(userId) {
+// --- Profile ---
+  static async upsertProfile(userId, profileData) {
     try {
+      // FINAL FIX: Destructure all possible fields to allow partial updates.
+      const { headline, about_me, age, location } = profileData;
       const { data, error } = await supabase
         .from('user_profiles')
-        .select('*')
-        .eq('id', userId)
+        .upsert({ id: userId, headline, about_me, age, location }, { onConflict: 'id' })
+        .select()
         .single();
-      if (error && error.code !== 'PGRST116') throw error;
+      if (error) throw error;
       return data;
     } catch (error) {
-      console.error('Error getting user profile:', error);
+      console.error('Error upserting user profile:', error);
       throw error;
     }
   }
@@ -36,11 +39,11 @@ class ProfileService {
   // --- Education ---
   static async addEducation(userId, educationData) {
     try {
-      // THE FIX: Explicitly destructure the object to ensure correct columns.
-      const { institution, degree, field_of_study, start_date, end_date } = educationData;
+      // FINAL FIX: Include 'description' in the destructuring.
+      const { institution, degree, field_of_study, start_date, end_date, description } = educationData;
       const { data, error } = await supabase
         .from('education')
-        .insert({ user_id: userId, institution, degree, field_of_study, start_date, end_date })
+        .insert({ user_id: userId, institution, degree, field_of_study, start_date, end_date, description })
         .select()
         .single();
       if (error) throw error;
@@ -53,10 +56,11 @@ class ProfileService {
 
   static async updateEducation(educationId, userId, educationData) {
     try {
-      const { institution, degree, field_of_study, start_date, end_date } = educationData;
+       // FINAL FIX: Include 'description' in the update as well.
+      const { institution, degree, field_of_study, start_date, end_date, description } = educationData;
       const { data, error } = await supabase
         .from('education')
-        .update({ institution, degree, field_of_study, start_date, end_date })
+        .update({ institution, degree, field_of_study, start_date, end_date, description })
         .eq('id', educationId)
         .eq('user_id', userId)
         .select()
